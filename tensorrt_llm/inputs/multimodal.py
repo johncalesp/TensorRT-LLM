@@ -9,6 +9,8 @@ import torch
 from blake3 import blake3
 from torchvision.transforms import ToPILImage
 
+from .._utils import nvtx_range_debug
+
 # Default hasher
 default_hasher = blake3
 
@@ -276,6 +278,7 @@ def hexdigest_to_int32(hex_digest: str) -> List[int]:
     return result
 
 
+@nvtx_range_debug("find_mm_token_lengths")
 def find_mm_token_lengths(mm_data: Dict[str, Any],
                           input_processor: Any) -> List[int]:
     """Get multimodal token lengths from multimodal data items. """
@@ -314,6 +317,7 @@ def find_mm_token_lengths(mm_data: Dict[str, Any],
     return num_mm_tokens['image']  # flatten all mm instances to a single list
 
 
+@nvtx_range_debug("find_mm_token_poisitions")
 def find_mm_token_positions(input_ids: Union[torch.Tensor, List[int],
                                              np.ndarray],
                             num_mm_tokens: List[int],
