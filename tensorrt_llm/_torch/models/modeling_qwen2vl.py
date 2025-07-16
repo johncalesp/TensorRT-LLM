@@ -35,7 +35,7 @@ class Qwen2VLInputProcessorBase(InputProcessor):
         self.model_config = model_config
         self.tokenizer = tokenizer
         # TODO: change to True and also change the according test result
-        self.use_fast = False
+        self.use_fast = True
         self.device = 'cuda'
         self.processor = AutoProcessor.from_pretrained(
             model_path,
