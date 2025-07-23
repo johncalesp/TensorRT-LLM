@@ -300,34 +300,43 @@ class Qwen2VLInputProcessorBase(InputProcessor):
             video_grid_thw: torch.LongTensor,
             attention_mask: torch.Tensor,
             second_per_grid_ts: torch.Tensor = None) -> dict[str, torch.Tensor]:
+        # mrope_position_ids, mrope_position_deltas = self.__class__.get_rope_index(
+        #     self.model_config, input_ids, image_grid_thw, video_grid_thw,
+        #     attention_mask, second_per_grid_ts)
+
+        # mrope_position_ids = mrope_position_ids.transpose(1, 0)
+        # mrope_position_ids_padding = torch.zeros(
+        #     mrope_position_ids.shape[:-1] +
+        #     (self.model_config.max_position_embeddings, ),
+        #     dtype=torch.int32,
+        #     device=input_ids.device)
+        # mrope_position_ids_padding[:, :, :mrope_position_ids.
+        #                            shape[-1]] = mrope_position_ids
+        # cos = self.cos_ori[mrope_position_ids_padding]
+        # sin = self.sin_ori[mrope_position_ids_padding]
+
+        # mrope_section = [16, 24, 24]
+        # cos = torch.cat([
+        #     m[:, i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))
+        # ],
+        #                 dim=-1).unsqueeze(-1)
+        # sin = torch.cat([
+        #     m[:, i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))
+        # ],
+        #                 dim=-1).unsqueeze(-1)
+        # concat_cos_sin = torch.concatenate((cos, sin), axis=-1)
+        # concat_cos_sin = concat_cos_sin.reshape(concat_cos_sin.shape[0], -1)
+        # mrope_config = {}
+        # mrope_config['mrope_rotary_cos_sin'] = concat_cos_sin.to('cpu')
+        # mrope_config['mrope_position_deltas'] = mrope_position_deltas.to(
+        #     'cpu').to(torch.int32)
+        # return mrope_config
         mrope_position_ids, mrope_position_deltas = self.__class__.get_rope_index(
             self.model_config, input_ids, image_grid_thw, video_grid_thw,
             attention_mask, second_per_grid_ts)
 
-        mrope_position_ids = mrope_position_ids.transpose(1, 0)
-        mrope_position_ids_padding = torch.zeros(
-            mrope_position_ids.shape[:-1] +
-            (self.model_config.max_position_embeddings, ),
-            dtype=torch.int32,
-            device=input_ids.device)
-        mrope_position_ids_padding[:, :, :mrope_position_ids.
-                                   shape[-1]] = mrope_position_ids
-        cos = self.cos_ori[mrope_position_ids_padding]
-        sin = self.sin_ori[mrope_position_ids_padding]
-
-        mrope_section = [16, 24, 24]
-        cos = torch.cat([
-            m[:, i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))
-        ],
-                        dim=-1).unsqueeze(-1)
-        sin = torch.cat([
-            m[:, i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))
-        ],
-                        dim=-1).unsqueeze(-1)
-        concat_cos_sin = torch.concatenate((cos, sin), axis=-1)
-        concat_cos_sin = concat_cos_sin.reshape(concat_cos_sin.shape[0], -1)
         mrope_config = {}
-        mrope_config['mrope_rotary_cos_sin'] = concat_cos_sin.to('cpu')
+        mrope_config['mrope_position_ids'] = mrope_position_ids.to('cpu')
         mrope_config['mrope_position_deltas'] = mrope_position_deltas.to(
             'cpu').to(torch.int32)
         return mrope_config
@@ -513,8 +522,25 @@ class Qwen2VLModelBase(PreTrainedModel):
         self.post_config()
         self.is_loaded = True
 
+    def init_rotary_cos_sin_ori(self):
+        _, rotary_cos_sin = RopeEmbeddingUtils.create_sinusoidal_positions_for_attention_plugin(
+            num_pos=self.model_config.pretrained_config.max_position_embeddings,
+            dim=int(self.model_config.pretrained_config.hidden_size /
+                    self.model_config.pretrained_config.num_attention_heads),
+            theta=float(self.model_config.pretrained_config.rope_theta),
+            scale_type=RotaryScalingType.mrope)
+        self.rotary_cos_sin = torch.from_numpy(rotary_cos_sin).to(self.device)
+        self.rotary_cos_sin = self.rotary_cos_sin.reshape(
+            self.model_config.pretrained_config.max_position_embeddings,
+            int(self.model_config.pretrained_config.hidden_size /
+                self.model_config.pretrained_config.num_attention_heads / 2), 2)
+
+        self.cos_ori = self.rotary_cos_sin[:, :, 0]
+        self.sin_ori = self.rotary_cos_sin[:, :, 1]
+
     def load_weights(self, weights):
         self.llm.load_weights(weights)
+        self.init_rotary_cos_sin_ori()
 
     def infer_max_seq_len(self) -> int:
         return self.llm.infer_max_seq_len()
@@ -566,6 +592,49 @@ class Qwen2VLModelBase(PreTrainedModel):
 
         return batched_mrope_config
 
+    def add_rotary_cos_sin(self, multimodal_params: List[MultimodalParams]):
+        for param in multimodal_params:
+            mrope_config = param.multimodal_data.get('mrope_config')
+            if mrope_config:
+                mrope_position_ids = mrope_config.get('mrope_position_ids',
+                                                      None)
+                if mrope_position_ids is None:
+                    continue
+                mrope_position_ids = mrope_position_ids.transpose(1, 0)
+                mrope_position_ids_padding = torch.zeros(
+                    mrope_position_ids.shape[:-1] +
+                    (self.model_config.pretrained_config.
+                     max_position_embeddings, ),
+                    dtype=torch.int32,
+                    device=mrope_position_ids.device)
+                mrope_position_ids_padding[:, :, :mrope_position_ids.
+                                           shape[-1]] = mrope_position_ids
+
+                mrope_position_ids_padding = mrope_position_ids_padding.to(
+                    self.cos_ori.device)
+                cos = self.cos_ori[mrope_position_ids_padding]
+                sin = self.sin_ori[mrope_position_ids_padding]
+
+                mrope_section = [16, 24, 24]
+                cos = torch.cat([
+                    m[:, i % 3]
+                    for i, m in enumerate(cos.split(mrope_section, dim=-1))
+                ],
+                                dim=-1).unsqueeze(-1)
+                sin = torch.cat([
+                    m[:, i % 3]
+                    for i, m in enumerate(sin.split(mrope_section, dim=-1))
+                ],
+                                dim=-1).unsqueeze(-1)
+                concat_cos_sin = torch.concatenate((cos, sin), axis=-1)
+                concat_cos_sin = concat_cos_sin.reshape(concat_cos_sin.shape[0],
+                                                        -1)
+
+                mrope_config['mrope_rotary_cos_sin'] = concat_cos_sin.to(
+                    self.device)
+
+        return multimodal_params
+
     @torch.inference_mode()
     def forward(
         self,
@@ -585,6 +654,8 @@ class Qwen2VLModelBase(PreTrainedModel):
         )
 
         multimodal_params = kwargs.get("multimodal_params", [])
+        multimodal_params = self.add_rotary_cos_sin(multimodal_params)
+
         mm_embeds = []
         mrope_config = {}
 
