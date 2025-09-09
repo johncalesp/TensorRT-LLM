@@ -1,0 +1,5 @@
+kv_cache_config:
+  enable_block_reuse: false
+  free_gpu_memory_fraction: 0.9
+cuda_graph_config:
+  max_batch_size: 512
