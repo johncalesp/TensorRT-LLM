@@ -52,7 +52,8 @@ class KvCacheCreator:
                  model_engine: PyTorchModelEngine,
                  draft_model_engine: Optional[PyTorchModelEngine],
                  mapping: Mapping, net_max_seq_len: int,
-                 kv_connector_manager: Optional[KvCacheConnectorManager]):
+                 kv_connector_manager: Optional[KvCacheConnectorManager],
+                 profiling_data: Optional[dict]):
         self._executor_config = executor_config
         self._model_engine = model_engine
         self._draft_model_engine = draft_model_engine
@@ -61,6 +62,7 @@ class KvCacheCreator:
         self._dummy_reqs = self._create_dummy_context_requests(net_max_seq_len -
                                                                1)
         self._kv_connector_manager = kv_connector_manager
+        self._profiling_data = profiling_data
 
     @staticmethod
     def _get_cache_size_per_token(model_config: ModelConfig,
@@ -402,6 +404,8 @@ class KvCacheCreator:
         )
         # set max_gpu_total_bytes
         executor_config.kv_cache_config.max_gpu_total_bytes = kv_cache_max_memory
+        if isinstance(self._profiling_data, dict):
+            self._profiling_data["max_gpu_total_bytes"] = kv_cache_max_memory
         # ---------------------------handle max_gpu_total_bytes---------------------------------
 
     def _create_kv_cache_manager(

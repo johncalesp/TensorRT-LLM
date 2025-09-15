@@ -228,8 +228,8 @@ def create_py_executor(
     tokenizer: Optional[TokenizerBase] = None,
     lora_config: Optional[LoraConfig] = None,
     kv_connector_config: Optional[KvCacheConnectorConfig] = None,
+    profiling_data: Optional[dict] = None,
 ) -> PyExecutor:
-
     executor_config = llm_args.get_executor_config(checkpoint_dir, tokenizer)
     garbage_collection_gen0_threshold = llm_args.garbage_collection_gen0_threshold
 
@@ -498,7 +498,8 @@ def create_py_executor(
             draft_model_engine=draft_model_engine,
             mapping=mapping,
             net_max_seq_len=net_max_seq_len,
-            kv_connector_manager=kv_connector_manager)
+            kv_connector_manager=kv_connector_manager,
+            profiling_data=profiling_data)
         estimating_kv_cache = kv_cache_creator.try_prepare_estimation()
         with mem_monitor.observe_creation_stage(
                 _ExecutorCreationStage.INIT_KV_CACHE
